@@ -10,7 +10,7 @@ library(raster)
 ano <- 2018
 
 # Raster reprojetado
-uso_solo <- rast(paste0("C:/Users/colar/Documents/vcolares_tcc_proj/input/", ano, "/mapbiomas_", ano, ".tif"))
+uso_solo <- rast(paste0("seu_caminho", ano, "/mapbiomas_", ano, ".tif"))
 
 # Reclassificação do raster MapBiomas (para o ano especifico) - Coleção 10 (2025)
 reclass_map_values <- c(
@@ -40,10 +40,10 @@ areas_classes <- as.data.frame(zonal(s_area, uso_solo_reclass, fun="sum", na.rm=
 names(areas_classes) <- c("classe", "hectare")
 
 # Salvando raster reclassificado na pasta
-writeRaster(uso_solo_reclass, "C:/Users/colar/Documents/vcolares_tcc_proj/input/2023/2023_classes.tif", overwrite = TRUE)
+writeRaster(uso_solo_reclass, "seu_caminho/nome_arquivo.tif", overwrite = TRUE)
 
 # Importando os Focos de calor 
-focos <- st_read(paste0("C:/Users/colar/Documents/vcolares_tcc_proj/input/", ano, "/focos.shp"))
+focos <- st_read(paste0("seu_caminho", ano, "/focos.shp"))
 
 # Converter a coluna de data/hora
 focos[["DataHora"]] <- as.POSIXct(focos[["DataHora"]], format = "%Y/%m/%d %H:%M:%S", tz = "UTC")
@@ -122,29 +122,22 @@ dados_finais <- left_join(totalfocos, areas_cobertura, by="cobertura") %>%
   ) %>%
   arrange(desc(round(densidade_focos,2)))
 
-write.csv2(dados_finais, "C:/Users/colar/Documents/vcolares_tcc_proj/input/2023/resumocompletonovo.csv",
-           row.names = FALSE, fileEncoding = "UTF-8")
-
-
 # Salvar saída automática
 write.csv(dados_finais,
           paste0("C:/Users/colar/Documents/vcolares_tcc_proj/input/", ano, "/resumo_", ano, "completo.csv"),
           row.names = FALSE)
 
 ##################################### ANALISE PELAS MICRORREGÕES DO RS ######################################### 
-# ---------------------------------------
-# PACOTES
-# ---------------------------------------
-library(sf)
-library(terra)
-library(dplyr)
 
+# Definir ano da análise
 ano <- 2023
 
+# Raster reprojetado
 uso_solo <- rast(
-  paste0("C:/Users/colar/Documents/vcolares_tcc_proj/input/", ano, "/mapbiomas_", ano, ".tif")
+  paste0("seu_caminho", ano, "/mapbiomas_", ano, ".tif")
 )
 
+# Reclassificação do raster MapBiomas (para o ano especifico) - Coleção 10 (2025)
 reclass_map_values <- c(
   "1"=1,"3"=1,"4"=1,"5"=1,"6"=1,"49"=1,
   "10"=10,"11"=10,"12"=10,"32"=10,"29"=10,"50"=10,
@@ -157,44 +150,51 @@ reclass_map_values <- c(
   "26"=26,"33"=26,"31"=26,
   "27"=27
 )
-
 reclass_matrix <- matrix(
   c(as.numeric(names(reclass_map_values)), as.numeric(reclass_map_values)),
   ncol = 2
 )
 
+# recebendo a matriz de reclassificação
 uso_solo_reclass <- classify(uso_solo, reclass_matrix)
 
+# Importando dados dos Focos de Calor
 focos <- st_read(
-  paste0("C:/Users/colar/Documents/vcolares_tcc_proj/input/", ano, "/focos.shp")
+  paste0("seu_caminho", ano, "/focos.shp")
 )
 
+# Garantindo o mesmo SRC
 focos <- st_transform(focos, crs(uso_solo_reclass))
 
+# Extraindo a classe de cobertura de solo incidente de cada foco
 focos$classe <- terra::extract(uso_solo_reclass, focos)[,2]
 
+# Importando as microrregiões do RS
 micro <- st_read(
-  "C:/Users/colar/Documents/vcolares_tcc_proj/input/microrregioes/microrregioes_.shp"
+  "seu_caminho/microrregioes_.shp"
 )
 
+# Garantindo o mesmo SRC
 micro <- st_transform(micro, st_crs(focos))
 
+# Aplicando a junção espacial, entre a geometria do ponto do foco e o limite territorial da Microrregião
 focos_micro <- st_join(focos, micro, left = FALSE)
-
 focos_micro_classe <- focos_micro %>%
   st_drop_geometry() %>%
   group_by(nomemicro, classe) %>%
   summarise(total_focos = n(), .groups = "drop")
 
+# Verificando qual classe de maior incidencia dos focos para cada Micro, com base na classe de maiores ocorrencias
 classe_predominante <- focos_micro_classe %>%
   group_by(nomemicro) %>%
   slice_max(total_focos, n = 1, with_ties = FALSE) %>%
   ungroup()
 
+# Salvando em formato csv
 write.csv2(
   classe_predominante,
   paste0(
-    "C:/Users/colar/Documents/vcolares_tcc_proj/output/classe_dominante_micro_",
+    "seu_caminho",
     ano,
     ".csv"
   ),
@@ -202,46 +202,3 @@ write.csv2(
   fileEncoding = "UTF-8"
 )
 
-
-# ano de interesse
-ano_alvo <- 2018
-classe_silvicultura <- 9   # ajuste se o código for outro
-
-# focos de 2018
-focos_2018 <- focos_sf %>%
-  filter(ano == ano_alvo)
-
-# extrair classe do solo para os focos
-focos_2018$classe_solo <- terra::extract(
-  uso_solo_reclass,
-  vect(focos_2018)
-)[,2]
-
-# manter apenas focos em silvicultura
-focos_silvicultura <- focos_2018 %>%
-  filter(classe_solo == classe_silvicultura)
-
-# juntar com microrregiões
-focos_micro <- st_join(
-  focos_silvicultura,
-  micro,
-  join = st_within
-)
-
-# contagem final por microrregião
-focos_silvicultura_micro_2018 <- focos_micro %>%
-  st_drop_geometry() %>%
-  group_by(nomemicro) %>%      # ajuste para o nome real do campo
-  summarise(total_focos = n()) %>%
-  arrange(desc(total_focos))
-
-write.csv2(
-  focos_silvicultura_micro_2018,
-  paste0(
-    "C:/Users/colar/Documents/vcolares_tcc_proj/output/focos_silvicultura_micro_2018_",
-    ano,
-    ".csv"
-  ),
-  row.names = FALSE,
-  fileEncoding = "UTF-8"
-)
