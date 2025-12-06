@@ -1,0 +1,236 @@
+# ============================================================
+# ANALISE DOS FOCOS DE CALOR E RELACAO COM O ENOS (RS)
+# ============================================================
+
+# ============================================================
+# PACOTES
+# ============================================================ 
+
+library(sf)
+library(dplyr)
+library(tidyr)
+library(Kendall)
+library(ggplot2)
+
+# ============================================================
+# 1. FOCOS DE CALOR
+# ============================================================
+
+focos_sf <- st_read(
+  "seu_caminho/focos.shp"
+) %>%
+  rename(ano = ano_1)
+
+# ------------------------------------------------------------
+# Agregacao anual
+# ------------------------------------------------------------
+
+focos_anuais <- focos_sf %>%
+  st_drop_geometry() %>%
+  group_by(ano) %>%
+  summarise(total_focos_anual = n(), .groups = "drop") %>%
+  mutate(ano = as.integer(ano)) %>%
+  arrange(ano)
+
+serie_focos_anual <- focos_anuais$total_focos_anual
+
+teste_mk_anual <- MannKendall(serie_focos_anual)
+print("Resultado Mann-Kendall (focos anuais)")
+print(teste_mk_anual)
+
+# ------------------------------------------------------------
+# Agregacao mensal
+# ------------------------------------------------------------
+
+focos_mensais <- focos_sf %>%
+  st_drop_geometry() %>%
+  group_by(ano, mes) %>%
+  summarise(total_focos_mensal = n(), .groups = "drop") %>%
+  mutate(
+    ano = as.integer(ano),
+    mes = as.integer(mes)
+  )
+
+# ============================================================
+# 2. DADOS ENOS (CPC)
+# ============================================================
+
+enso <- read.csv(          #### Tabela com os valores das anomalias, fonte CPC
+  "seu_caminho/enso.csv"
+)
+
+# Nomeando corretamente as colunas
+enso_long <- enso %>%
+  pivot_longer(
+    cols = -Year,
+    names_to = "periodo",
+    values_to = "valor_enso"
+  )
+
+# Conversao periodo(texto) -> mes numerico(numerico)
+enso_long <- enso_long %>%
+  mutate(
+    mes = case_when(
+      periodo == "DJF" ~ 1,
+      periodo == "JFM" ~ 2,
+      periodo == "FMA" ~ 3,
+      periodo == "MAM" ~ 4,
+      periodo == "AMJ" ~ 5,
+      periodo == "MJJ" ~ 6,
+      periodo == "JJA" ~ 7,
+      periodo == "JAS" ~ 8,
+      periodo == "ASO" ~ 9,
+      periodo == "SON" ~ 10,
+      periodo == "OND" ~ 11,
+      periodo == "NDJ" ~ 12
+    ),
+    ano = as.integer(Year),
+    classificacao_enso = case_when(
+      valor_enso > 0.5  ~ "El Niño",
+      valor_enso < -0.5 ~ "La Niña",
+      TRUE              ~ "Neutro"
+    )
+  )
+
+# ============================================================
+# 3. ENOS ANUAL (CLASSIFICACAO DOMINANTE) TESTE DE KRUSKAL WALLIS
+# ============================================================
+
+enso_por_ano <- enso_long %>%
+  group_by(ano, classificacao_enso) %>%
+  summarise(n_periodos = n(), .groups = "drop_last") %>%
+  arrange(ano, desc(n_periodos)) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  select(ano, classificacao_anual = classificacao_enso)
+
+dados_analise_enso_anual <- left_join(
+  focos_anuais,
+  enso_por_ano,
+  by = "ano"
+) %>%
+  filter(!is.na(classificacao_anual))
+
+teste_kruskal_anual <- kruskal.test(
+  total_focos_anual ~ classificacao_anual,
+  data = dados_analise_enso_anual
+)
+
+print("Kruskal-Wallis anual (focos vs ENOS)")
+print(teste_kruskal_anual)
+
+# ============================================================
+# 4. ENOS MENSAL TESTE DE Kruskal Wallis mensal + Teste de Wilcoxon entre as diferentes duplas (el nino x neutro, neutro x la nina, el nino x la nina)
+# ============================================================
+
+dados_analise_mensal <- left_join(
+  focos_mensais,
+  enso_long %>% select(ano, mes, classificacao_enso),
+  by = c("ano", "mes")
+) %>%
+  filter(!is.na(classificacao_enso))
+
+# Kruskal-Wallis mensal
+kruskal_mensal <- kruskal.test(
+  total_focos_mensal ~ classificacao_enso,
+  data = dados_analise_mensal
+)
+print("Kruskal-Wallis mensal")
+print(kruskal_mensal)
+
+# Teste de Wilcoxon
+wilcox.test(
+  total_focos_mensal ~ classificacao_enso,
+  data = dados_analise_mensal %>%
+    filter(classificacao_enso %in% c("La Niña", "Neutro"))
+)
+
+wilcox.test(
+  total_focos_mensal ~ classificacao_enso,
+  data = dados_analise_mensal %>%
+    filter(classificacao_enso %in% c("El Niño", "Neutro"))
+)
+
+wilcox.test(
+  total_focos_mensal ~ classificacao_enso,
+  data = dados_analise_mensal %>%
+    filter(classificacao_enso %in% c("La Niña", "El Niño"))
+)
+
+# Estatisticas descritivas (La Niña x El Niño)
+dados_analise_mensal %>%
+  filter(classificacao_enso %in% c("La Niña", "Neutro")) %>%
+  group_by(classificacao_enso) %>%
+  summarise(
+    mediana_focos = median(total_focos_mensal),
+    media_focos = mean(total_focos_mensal),
+    n = n()
+  )
+
+# ============================================================
+# 5. GRAFICOS
+# ============================================================
+cores_enso <- c(
+  "El Niño" = "#D55E00",
+  "La Niña" = "#0072B2",
+  "Neutro" = "#009E73"
+)
+library(dplyr)
+
+dados_violino_facets <- dados_analise_mensal %>%
+  filter(classificacao_enso %in% c("El Niño", "La Niña", "Neutro")) %>%
+  mutate(
+    comparacao = case_when(
+      classificacao_enso %in% c("El Niño", "La Niña") ~ "El Niño × La Niña",
+      classificacao_enso %in% c("El Niño", "Neutro") ~ "El Niño × Neutro",
+      classificacao_enso %in% c("La Niña", "Neutro") ~ "La Niña × Neutro"
+    )
+  ) %>%
+  filter(
+    !is.na(comparacao),
+    !(
+      comparacao == "El Niño × La Niña" & classificacao_enso == "Neutro" |
+        comparacao == "El Niño × Neutro" & classificacao_enso == "La Niña" |
+        comparacao == "La Niña × Neutro" & classificacao_enso == "El Niño"
+    )
+  )
+
+cores_enso <- c(
+  "El Niño" = "#D55E00",
+  "La Niña" = "#0072B2",
+  "Neutro"  = "#009E73"
+)
+
+ggplot(
+  dados_violino_facets,
+  aes(
+    x = classificacao_enso,
+    y = total_focos_mensal,
+    fill = classificacao_enso
+  )
+) +
+  geom_violin(trim = FALSE, alpha = 0.65) +
+  geom_boxplot(
+    width = 0.12,
+    fill = "white",
+    outlier.shape = NA
+  ) +
+  stat_summary(
+    fun = median,
+    geom = "point",
+    size = 2,
+    shape = 21,
+    fill = "black"
+  ) +
+  facet_wrap(~ comparacao, ncol = 1, scales = "free_x") +
+  scale_fill_manual(values = cores_enso) +
+  labs(
+    x = "Fase do ENOS",
+    y = "Total mensal de focos de calor"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    panel.spacing = unit(1.2, "lines")
+  )
