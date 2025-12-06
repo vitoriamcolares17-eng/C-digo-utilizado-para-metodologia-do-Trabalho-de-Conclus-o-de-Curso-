@@ -4,7 +4,6 @@ library(sf)          # para dados vetoriais
 library(dplyr)       # manipulação de dados
 library(ggplot2)     # Visualização
 library(lubridate)   # datas e tempos
-library(raster)
 
 # Definir ano da análise
 ano <- 2018
